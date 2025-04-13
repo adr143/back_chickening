@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask WebSocket Audio-Video</title>
+</head>
+<body>
+    <h2>Live Video</h2>
+    <video id="videoElement" autoplay></video>
+    <canvas id="processedCanvas"></canvas>
+
+    <h2>Live Audio Graph</h2>
+    <img id="waveform" src="" alt="Audio Waveform">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        // Capture Video
+        const video = document.getElementById('videoElement');
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                video.srcObject = stream;
+                const videoTrack = stream.getVideoTracks()[0];
+                const imageCapture = new ImageCapture(videoTrack);
+
+                setInterval(async () => {
+                    const bitmap = await imageCapture.grabFrame();
+                    const canvas = document.createElement('canvas');
+                    canvas.width = bitmap.width;
+                    canvas.height = bitmap.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(bitmap, 0, 0);
+                    
+                    canvas.toBlob(blob => {
+                        const reader = new FileReader();
+                        reader.readAsDataURL(blob);
+                        reader.onloadend = () => {
+                            const base64data = reader.result.split(',')[1];
+                            socket.emit('video_frame', base64data);
+                        };
+                    }, 'image/jpeg');
+                }, 100);
+            });
+
+        // Receive processed video
+        socket.on('processed_video', data => {
+            const img = new Image();
+            img.src = `data:image/jpeg;base64,${data}`;
+            img.onload = () => {
+                const canvas = document.getElementById('processedCanvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+            };
+        });
+
+        // Capture Audio
+        navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+                const audioContext = new AudioContext();
+                const mediaRecorder = new MediaRecorder(stream);
+                const audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const reader = new FileReader();
+                    reader.readAsDataURL(audioBlob);
+                    reader.onloadend = () => {
+                        const base64data = reader.result.split(',')[1];
+                        socket.emit('audio_data', base64data);
+                    };
+                };
+
+                setInterval(() => {
+                    if (mediaRecorder.state === "recording") {
+                        mediaRecorder.stop();
+                        mediaRecorder.start();
+                    } else {
+                        mediaRecorder.start();
+                    }
+                }, 2000);
+            });
+
+        // Receive and display waveform
+        socket.on('audio_graph', data => {
+            document.getElementById('waveform').src = data + "?t=" + new Date().getTime();
+        });
+
+    </script>
+</body>
+</html>
